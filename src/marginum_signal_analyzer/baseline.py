@@ -23,6 +23,8 @@ SMOOTHING_WINDOW = 101
 SMOOTHING_POLYNOMIAL_ORDER = 2
 PEAK_PROMINENCE = 5
 PEAK_DISTANCE_SECONDS = 0.5
+LOW_AMPLITUDE_THRESHOLD = 8
+HIGH_AMPLITUDE_THRESHOLD = 15
 
 def estimate_baseline(signal: np.ndarray) -> np.ndarray:
     """Estimate the slow-changing baseline of a signal."""
@@ -56,6 +58,14 @@ def detect_peaks(
     )
     return peaks, properties
 
+def classify_peak(amplitude: float) -> str:
+    """Classify a peak using its baseline-corrected amplitude."""
+    if amplitude < LOW_AMPLITUDE_THRESHOLD:
+        return "low"
+    if amplitude < HIGH_AMPLITUDE_THRESHOLD:
+        return "middle"
+    return "high"
+
 def main() -> None:
     OUTPUT_PATH.parent.mkdir(exist_ok=True)
     start_sample = START_TIME * SAMPLE_RATE
@@ -69,6 +79,8 @@ def main() -> None:
     corrected_signal = adc2 - baseline
     smoothed_signal = smooth_signal(corrected_signal)
     peaks, peak_properties = detect_peaks(smoothed_signal)
+    peak_amplitudes = smoothed_signal[peaks]
+    classifications = [classify_peak(amplitude) for amplitude in peak_amplitudes]
 
     figure, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
     axes[0].plot(time, adc2, label="adc2", linewidth=0.6, alpha=0.7)
@@ -92,13 +104,21 @@ def main() -> None:
     axes[2].legend()
     axes[2].grid(True, alpha=0.3)
     axes[3].plot(time, smoothed_signal, label="smoothed corrected adc2", linewidth=0.8)
-    axes[3].scatter(
-        time[peaks],
-        smoothed_signal[peaks],
-        color="red",
-        label="detected peaks",
-        zorder=3,
-    )
+    colors = {"low": "blue", "middle": "orange", "high": "red"}
+    for category in ("low", "middle", "high"):
+        category_indexes = [
+            index
+            for index, classification in enumerate(classifications)
+            if classification == category
+        ]
+        if category_indexes:
+            axes[3].scatter(
+                time[peaks[category_indexes]],
+                peak_amplitudes[category_indexes],
+                color=colors[category],
+                label=f"{category} peaks",
+                zorder=3,
+            )
     axes[3].axhline(0, color="black", linewidth=0.8)
     axes[3].set_xlabel("Time (seconds)")
     axes[3].set_ylabel("Signal value")
@@ -110,16 +130,21 @@ def main() -> None:
     plt.show()
 
     print(f"Detected peaks: {len(peaks)}")
-    for peak_number, peak_index in enumerate(peaks, start=1):
+    for peak_number, (peak_index, amplitude, classification) in enumerate(
+        zip(peaks, peak_amplitudes, classifications, strict=True),
+        start=1,
+    ):
         peak_time = time[peak_index]
-        peak_amplitude = smoothed_signal[peak_index]
         peak_prominence = peak_properties["prominences"][peak_number - 1]
         print(
             f"Peak {peak_number}: "
             f"time={peak_time:.3f}s, "
-            f"amplitude={peak_amplitude:.3f}, "
-            f"prominence={peak_prominence:.3f}"
+            f"amplitude={amplitude:.3f}, "
+            f"prominence={peak_prominence:.3f}, "
+            f"class={classification}"
         )
+    for category in ("low", "middle", "high"):
+        print(f"{category.capitalize()} peaks: {classifications.count(category)}")
     print(f"Saved peak plot to: {OUTPUT_PATH}")
 
 if __name__ == "__main__":
