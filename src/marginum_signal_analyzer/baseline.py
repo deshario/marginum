@@ -45,14 +45,16 @@ def smooth_signal(signal: np.ndarray) -> np.ndarray:
         polyorder=SMOOTHING_POLYNOMIAL_ORDER,
     )
 
-def detect_peaks(signal: np.ndarray) -> np.ndarray:
+def detect_peaks(
+    signal: np.ndarray,
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     """Find prominent peaks separated by a minimum time distance."""
-    peaks, _ = find_peaks(
+    peaks, properties = find_peaks(
         signal,
         prominence=PEAK_PROMINENCE,
         distance=int(PEAK_DISTANCE_SECONDS * SAMPLE_RATE),
     )
-    return peaks
+    return peaks, properties
 
 def main() -> None:
     OUTPUT_PATH.parent.mkdir(exist_ok=True)
@@ -66,7 +68,7 @@ def main() -> None:
     baseline = estimate_baseline(adc2)
     corrected_signal = adc2 - baseline
     smoothed_signal = smooth_signal(corrected_signal)
-    peaks = detect_peaks(smoothed_signal)
+    peaks, peak_properties = detect_peaks(smoothed_signal)
 
     figure, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
     axes[0].plot(time, adc2, label="adc2", linewidth=0.6, alpha=0.7)
@@ -108,6 +110,16 @@ def main() -> None:
     plt.show()
 
     print(f"Detected peaks: {len(peaks)}")
+    for peak_number, peak_index in enumerate(peaks, start=1):
+        peak_time = time[peak_index]
+        peak_amplitude = smoothed_signal[peak_index]
+        peak_prominence = peak_properties["prominences"][peak_number - 1]
+        print(
+            f"Peak {peak_number}: "
+            f"time={peak_time:.3f}s, "
+            f"amplitude={peak_amplitude:.3f}, "
+            f"prominence={peak_prominence:.3f}"
+        )
     print(f"Saved peak plot to: {OUTPUT_PATH}")
 
 if __name__ == "__main__":
