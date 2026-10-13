@@ -11,3 +11,9 @@ wheels/
 
 # Local measurement data
 data/
+
+# Generated plots and analysis output
+output/
+
+# Local project planning
+PROJECT_PLAN.md

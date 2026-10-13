@@ -41,7 +41,6 @@ def read_chunks(
         if chunk:
             yield chunk
 
-
 def read_window(
     csv_path: str | Path,
     start_sample: int,

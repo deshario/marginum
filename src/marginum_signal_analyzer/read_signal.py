@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from industrial_project.chunk_reader import read_chunks, read_window
+from marginum_signal_analyzer.chunk_reader import read_chunks, read_window
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CSV_PATH = (
