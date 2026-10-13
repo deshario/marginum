@@ -15,5 +15,8 @@ data/
 # Generated plots and analysis output
 output/
 
+# Generated binary signal cache
+cache/
+
 # Local project planning
 PROJECT_PLAN.md
