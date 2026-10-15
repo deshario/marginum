@@ -16,7 +16,8 @@ from marginum_signal_analyzer.plot_signal import downsample_for_plot
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SAMPLE_RATE = 50_000
-WINDOW_SIZE = SAMPLE_RATE
+WINDOW_SECONDS = 5
+WINDOW_SIZE = SAMPLE_RATE * WINDOW_SECONDS
 STEP_SIZE = SAMPLE_RATE
 PLOT_POINTS = 5_000
 

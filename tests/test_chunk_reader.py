@@ -14,7 +14,7 @@ def create_sample_signal_csv(tmp_path):
     return csv_path
 
 # Check that CSV samples are returned in separate chunks.
-def test_read_chunks_splits_sample_csv_into_chunks(tmp_path):
+def test_read_chunks(tmp_path):
     csv_path = create_sample_signal_csv(tmp_path)
     chunk_size = 2
     expected_chunks = [
@@ -27,7 +27,7 @@ def test_read_chunks_splits_sample_csv_into_chunks(tmp_path):
     assert actual_chunks == expected_chunks
 
 # Check that only the requested sample range is returned.
-def test_read_window_returns_selected_sample_range(tmp_path):
+def test_read_window(tmp_path):
     csv_path = create_sample_signal_csv(tmp_path)
     start_sample = 1
     end_sample = 3
