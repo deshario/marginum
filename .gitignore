@@ -20,3 +20,11 @@ cache/
 
 # Local project planning
 PROJECT_PLAN.md
+
+UNIT_TEST_PLAN.md
+
+notebooks
+
+.DS_STORE
+
+README.md

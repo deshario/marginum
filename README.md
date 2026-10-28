@@ -13,7 +13,15 @@ The viewer:
 - Opens the cached signal data.
 - Shows a selected signal window for ADC1 and ADC2.
 - Lets you move between windows with Previous and Next.
+- Includes Play/Pause controls for automatic window playback.
+- Loops back to the first window after the final window.
 - Does not detect or print peak results.
+
+Start playback automatically:
+
+```bash
+uv run python -m marginum_signal_analyzer.window_viewer --autoplay
+```
 
 Run the signal-processing and peak-detection pipeline:
 
