@@ -1,6 +1,6 @@
 import numpy as np
 
-from marginum_signal_analyzer.analysis import process_chunks
+from marginum.analysis import process_chunks
 
 def test_chunk_processing_uses_global_positions_and_no_duplicates():
     signal = np.zeros(30)

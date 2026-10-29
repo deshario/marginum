@@ -1,5 +1,5 @@
 [project]
-name = "marginum-signal-analyzer"
+name = "marginum"
 version = "0.1.0"
 description = "GUI for detecting peaks in large signal CSV files"
 readme = "README.md"
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.gui-scripts]
-marginum-signal-analyzer = "marginum_signal_analyzer.gui:main"
+marginum = "marginum.gui:main"
 
 [build-system]
 requires = ["uv_build>=0.13.0,<0.14.0"]
@@ -24,3 +24,6 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.1.1",
 ]
+
+[tool.uv.build-backend]
+module-name = "marginum"

@@ -240,7 +240,7 @@ wheels = [
 ]
 
 [[package]]
-name = "marginum-signal-analyzer"
+name = "marginum"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -6,7 +6,7 @@ Python 3.13+, [uv](https://docs.astral.sh/uv/), and Tk (included with most Pytho
 
 ```bash
 uv sync
-uv run marginum-signal-analyzer
+uv run marginum
 ```
 
 ## Use
