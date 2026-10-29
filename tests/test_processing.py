@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from marginum_signal_analyzer.processing import (
+from marginum.processing import (
     detect_peaks,
     estimate_baseline,
     find_signal_peaks,

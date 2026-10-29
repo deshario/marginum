@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from marginum_signal_analyzer.signal_io import read_signal_chunks
+from marginum.signal_io import read_signal_chunks
 
 def create_csv(tmp_path):
     path = tmp_path / "signal.csv"
