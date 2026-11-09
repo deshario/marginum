@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import csv
-from collections.abc import Iterator
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 def _signal_column(header: list[str], column: int | str) -> int:
     if isinstance(column, int):
@@ -29,33 +28,34 @@ def read_signal_chunks(
 
     source_path = Path(path)
     total_bytes = source_path.stat().st_size
-    with source_path.open(newline="", encoding="utf-8") as file:
-        reader = csv.reader(file)
+    try:
+        header = list(pd.read_csv(source_path, nrows=0).columns)
+    except pd.errors.EmptyDataError as error:
+        raise ValueError("Signal file is empty") from error
+    column_index = _signal_column(header, column)
+
+    rows_read = 0
+    with source_path.open("rb") as file:
         try:
-            header = next(reader)
-        except StopIteration as error:
-            raise ValueError("Signal file is empty") from error
-
-        column_index = _signal_column(header, column)
-        values: list[float] = []
-        processed_bytes = len(",".join(header).encode("utf-8")) + 1
-        for line_number, row in enumerate(reader, start=2):
-            if len(row) <= column_index:
-                raise ValueError(f"Missing signal column at line {line_number}")
-            try:
-                values.append(float(row[column_index]))
-            except ValueError as error:
-                raise ValueError(
-                    f"Invalid signal value at line {line_number}: {row[column_index]!r}"
-                ) from error
-            processed_bytes += len(",".join(row).encode("utf-8")) + 1
-            if len(values) == chunk_size:
+            reader = pd.read_csv(
+                file,
+                usecols=[column_index],
+                dtype=np.float64,
+                chunksize=chunk_size,
+            )
+            for frame in reader:
+                values = frame.iloc[:, 0].to_numpy()
+                if values.size == 0:
+                    continue
+                bad = np.flatnonzero(np.isnan(values))
+                if bad.size:
+                    line = rows_read + int(bad[0]) + 2
+                    raise ValueError(f"Missing or invalid signal value at line {line}")
+                rows_read += len(values)
                 if progress is not None:
-                    progress(min(processed_bytes, total_bytes), total_bytes)
-                yield np.asarray(values, dtype=float)
-                values = []
-
-        if values:
-            if progress is not None:
-                progress(min(processed_bytes, total_bytes), total_bytes)
-            yield np.asarray(values, dtype=float)
+                    progress(min(file.tell(), total_bytes), total_bytes)
+                yield values
+        except (ValueError, pd.errors.ParserError) as error:
+            if str(error).startswith("Missing or invalid"):
+                raise
+            raise ValueError(f"Invalid signal data after line {rows_read + 1}: {error}") from error
