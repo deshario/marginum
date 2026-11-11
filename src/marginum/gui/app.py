@@ -329,6 +329,7 @@ class SignalAnalyzerApp:
         self.settings_panel.set_running(running)
 
 def main() -> None:
+    ChunkCache.remove_leftovers()  # from runs that were killed or crashed
     root = tk.Tk()
     SignalAnalyzerApp(root)
     root.mainloop()
