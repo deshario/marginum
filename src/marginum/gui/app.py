@@ -14,6 +14,7 @@ from ..analysis import process_chunks
 from ..processing import find_signal_peaks
 from ..signal_io import read_signal_chunks
 from .config import LIVE_REFRESH_SECONDS, SAMPLE_RATE_HZ
+from .peak_navigator import PeakNavigator
 from .plot_view import PlotView
 
 class _Cancelled(Exception):
@@ -43,15 +44,12 @@ class SignalAnalyzerApp:
         self.advanced_expanded = False
         self.last_progress_percent = 0
         self.processing_started_at: float | None = None
-        self.peak_position = tk.StringVar(value="No peaks selected")
         self.full_peaks = np.empty(0, dtype=int)
         self.overview_indices = np.empty(0, dtype=int)
         self.overview_values = np.empty(0, dtype=float)
         self.overview_total_samples = 0
         self.cache_dir: Path | None = None
         self.cached_chunks: list[tuple[int, int, Path]] = []
-        self.selected_peak_index = -1
-        self.navigation_busy = False
         self.start_button: ttk.Button
         self.stop_button: ttk.Button
         self.browse_buttons: list[ttk.Button] = []
@@ -60,6 +58,7 @@ class SignalAnalyzerApp:
         self.run_settings: dict[str, int | float | str | bool] = {}
         self.show_live = tk.BooleanVar(value=True)
         self.plot: PlotView
+        self.navigator: PeakNavigator
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self._build()
 
@@ -175,24 +174,7 @@ class SignalAnalyzerApp:
         plot_frame.rowconfigure(0, weight=1)
         plot_frame.columnconfigure(0, weight=1)
         self.plot = PlotView(plot_frame)
-        navigation = ttk.Frame(plot_frame)
-        navigation.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        self.previous_button = ttk.Button(
-            navigation, text="Previous peak", command=lambda: self._navigate_peak(-1)
-        )
-        self.previous_button.pack(side=tk.LEFT)
-        self.next_button = ttk.Button(
-            navigation, text="Next peak", command=lambda: self._navigate_peak(1)
-        )
-        self.next_button.pack(side=tk.LEFT, padx=(6, 0))
-        self.overview_button = ttk.Button(
-            navigation, text="Overview", command=self._show_overview
-        )
-        self.overview_button.pack(side=tk.LEFT, padx=(6, 0))
-        self._set_navigation_enabled(False)
-        ttk.Label(navigation, textvariable=self.peak_position).pack(
-            side=tk.LEFT, padx=(12, 0)
-        )
+        self.navigator = PeakNavigator(plot_frame, self)
         self.plot.draw_empty()
 
     def _toggle_advanced(self) -> None:
@@ -266,10 +248,10 @@ class SignalAnalyzerApp:
             self.summary.set("")
             self._clear_cache()
             self.full_peaks = np.empty(0, dtype=int)
-            self.navigation_busy = False
-            self.selected_peak_index = -1
-            self._set_navigation_enabled(False)
-            self.peak_position.set("No peaks selected")
+            self.navigator.busy = False
+            self.navigator.selected_index = -1
+            self.navigator.set_enabled(False)
+            self.navigator.position.set("No peaks selected")
             self.plot.draw_empty()
             self.status.set("")
 
@@ -323,9 +305,9 @@ class SignalAnalyzerApp:
         self._update_elapsed_time()
         self.full_peaks = np.empty(0, dtype=int)
         self._clear_cache()
-        self.selected_peak_index = -1
-        self._set_navigation_enabled(False)
-        self.peak_position.set("")
+        self.navigator.selected_index = -1
+        self.navigator.set_enabled(False)
+        self.navigator.position.set("")
         self.summary.set("")  # hide the previous run's results
         self.plot.clear(
             None
@@ -510,7 +492,7 @@ class SignalAnalyzerApp:
         self.overview_indices = overview_indices
         self.overview_values = overview_values
         self.overview_total_samples = overview_total_samples
-        self.selected_peak_index = 0 if len(peaks) else -1
+        self.navigator.selected_index = 0 if len(peaks) else -1
         self.progress.set(100)
         self.last_progress_percent = 100
         self.status.set("Analysis complete.")
@@ -524,57 +506,14 @@ class SignalAnalyzerApp:
             f"Saved: {output}"
         )
         if len(peaks):
-            self._set_navigation_enabled(True)
-            self._update_peak_position()
-            self.navigation_busy = True
-            self.previous_button.configure(state=tk.DISABLED)
-            self.next_button.configure(state=tk.DISABLED)
-            threading.Thread(
-                target=self._load_selected_peak,
-                args=(self.selected_peak_index,),
-                daemon=True,
-            ).start()
+            self.navigator.set_enabled(True)
+            self.navigator.update_position()
+            self.navigator.start_load()
         else:
-            self.peak_position.set("No peaks detected")
-            self._set_navigation_enabled(False)
+            self.navigator.position.set("No peaks detected")
+            self.navigator.set_enabled(False)
             self.plot.draw_signal(raw, baseline, flat, clean, peaks, offset=0)
         self._set_running(False)
-
-    def _navigate_peak(self, direction: int) -> None:
-        if not len(self.full_peaks) or self.navigation_busy:
-            self.status.set("No detected peaks to navigate.")
-            return
-        self.selected_peak_index = (
-            self.selected_peak_index + direction
-        ) % len(self.full_peaks)
-        self._update_peak_position()
-        self.navigation_busy = True
-        self.previous_button.configure(state=tk.DISABLED)
-        self.next_button.configure(state=tk.DISABLED)
-        selected_index = self.selected_peak_index
-        threading.Thread(
-            target=self._load_selected_peak,
-            args=(selected_index,),
-            daemon=True,
-        ).start()
-
-    def _show_overview(self) -> None:
-        if not self.input_path.get():
-            self.status.set("Choose a signal file first.")
-            return
-        if not len(self.full_peaks):
-            self.status.set("Run analysis before showing the overview.")
-            return
-        if not len(self.overview_values):
-            self.status.set("Overview data is unavailable. Run analysis again.")
-            return
-        self.plot.draw_overview(
-            self.overview_indices,
-            self.overview_values,
-            self.overview_total_samples,
-            self.full_peaks,
-        )
-        self.status.set("Full-file overview loaded.")
 
     def _clear_cache(self) -> None:
         if self.cache_dir is not None:
@@ -592,69 +531,6 @@ class SignalAnalyzerApp:
     def _close(self) -> None:
         self._clear_cache()
         self.root.destroy()
-
-    def _update_peak_position(self) -> None:
-        sample = int(self.full_peaks[self.selected_peak_index])
-        self.peak_position.set(
-            f"Peak {self.selected_peak_index + 1} of {len(self.full_peaks)}\n"
-            f"Sample: {sample:,}"
-        )
-
-    def _load_selected_peak(self, selected_index: int) -> None:
-        try:
-            self._load_selected_peak_unchecked(selected_index)
-        except Exception as error:  # always unlock navigation, whatever went wrong
-            self.root.after(0, self._peak_load_failed, str(error))
-
-    def _peak_load_failed(self, message: str) -> None:
-        self.navigation_busy = False
-        self.previous_button.configure(state=tk.NORMAL)
-        self.next_button.configure(state=tk.NORMAL)
-        self.status.set(f"Could not load peak: {message}")
-
-    def _load_selected_peak_unchecked(self, selected_index: int) -> None:
-        peak = int(self.full_peaks[selected_index])
-        settings = self.run_settings
-        window = max(1, int(settings["preview_samples"]))
-        start = max(0, peak - window // 2)
-        raw = self._read_window(start, start + window)
-        if raw.size == 0:
-            raise ValueError("no samples in the selected window")
-        baseline, flat, clean, _ = find_signal_peaks(
-            raw,
-            height=float(settings["height"]),
-            distance=int(settings["distance"]),
-        )
-        visible_peaks = self.full_peaks[
-            (self.full_peaks >= start) & (self.full_peaks < start + len(raw))
-        ] - start
-        self.root.after(
-            0,
-            self._focused_peak_loaded,
-            selected_index,
-            raw,
-            baseline,
-            flat,
-            clean,
-            visible_peaks,
-            start,
-        )
-
-    def _focused_peak_loaded(
-        self,
-        selected_index: int,
-        raw: np.ndarray,
-        baseline: np.ndarray,
-        flat: np.ndarray,
-        clean: np.ndarray,
-        peaks: np.ndarray,
-        offset: int,
-    ) -> None:
-        self.navigation_busy = False
-        self.previous_button.configure(state=tk.NORMAL)
-        self.next_button.configure(state=tk.NORMAL)
-        if selected_index == self.selected_peak_index:
-            self.plot.draw_signal(raw, baseline, flat, clean, peaks, offset)
 
     def _read_window(self, start: int, stop: int) -> np.ndarray:
         if self.cached_chunks:
@@ -699,14 +575,14 @@ class SignalAnalyzerApp:
         self.processing_started_at = None
         self._clear_cache()
         self.full_peaks = np.empty(0, dtype=int)
-        self.selected_peak_index = -1
+        self.navigator.selected_index = -1
         self.progress.set(0)
         self.last_progress_percent = 0
         self.progress_detail.set("")
         self.elapsed_time.set("")
         self.summary.set("")
-        self.peak_position.set("No peaks selected")
-        self._set_navigation_enabled(False)
+        self.navigator.position.set("No peaks selected")
+        self.navigator.set_enabled(False)
         self.plot.clear()
         self.plot.draw_empty()
         self.status.set("")
@@ -717,7 +593,7 @@ class SignalAnalyzerApp:
         self.progress_detail.set("")
         self.processing_started_at = None
         self._clear_cache()  # a failed run must not leave a partial cache on disk
-        self._set_navigation_enabled(False)
+        self.navigator.set_enabled(False)
         self._set_running(False)
         messagebox.showerror("Processing failed", message)
 
@@ -742,12 +618,6 @@ class SignalAnalyzerApp:
         self.live_check.configure(state=state)
         for button in self.browse_buttons:
             button.configure(state=state)
-
-    def _set_navigation_enabled(self, enabled: bool) -> None:
-        state = tk.NORMAL if enabled else tk.DISABLED
-        self.previous_button.configure(state=state)
-        self.next_button.configure(state=state)
-        self.overview_button.configure(state=state)
 
 def main() -> None:
     root = tk.Tk()
