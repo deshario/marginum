@@ -20,6 +20,7 @@ class PeakNavigator:
         self.app = app
         self.selected_index = -1
         self.busy = False
+        self.overview_shown = False  # a late peak load must not draw over the overview
         self.position = tk.StringVar(value="No peaks selected")
 
         navigation = ttk.Frame(parent)
@@ -61,6 +62,7 @@ class PeakNavigator:
     def start_load(self) -> None:
         """Load the window around the selected peak without blocking the UI."""
         self.busy = True
+        self.overview_shown = False
         selected_index = self.selected_index
         threading.Thread(
             target=self._load_selected_peak,
@@ -85,6 +87,7 @@ class PeakNavigator:
             app.overview_total_samples,
             app.full_peaks,
         )
+        self.overview_shown = True
         app.status.set("Full-file overview loaded.")
 
     def update_position(self) -> None:
@@ -141,5 +144,5 @@ class PeakNavigator:
         offset: int,
     ) -> None:
         self.busy = False
-        if selected_index == self.selected_index:
+        if selected_index == self.selected_index and not self.overview_shown:
             self.app.plot.draw_signal(raw, clean, peaks, offset)
