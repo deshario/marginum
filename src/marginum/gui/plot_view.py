@@ -15,6 +15,7 @@ class PlotView:
     def __init__(self, parent: ttk.Frame) -> None:
         self.figure = Figure(figsize=(8, 6), dpi=100)
         self.live_line = None
+        self.channel = "adc2"  # shown in the Y-axis label; set from the run settings
         self.canvas = FigureCanvasTkAgg(self.figure, master=parent)
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
@@ -61,7 +62,7 @@ class PlotView:
                 live_time, signal, color="#2563eb", linewidth=0.8
             )
             axis.set_xlabel("Time (s)")
-            axis.set_ylabel("ADC counts (adc2)")
+            axis.set_ylabel(f"ADC counts ({self.channel})")
             axis.grid(alpha=0.25)
             axis.set_title(f"Live signal overview ({rows:,} samples scanned)")
             self.figure.tight_layout()  # after the title so it reserves room for it
@@ -104,7 +105,7 @@ class PlotView:
             )
         axis.set_title(f"Signal overview - {len(full_peaks):,} peaks detected")
         axis.set_xlabel("Time (s)")
-        axis.set_ylabel("ADC counts (adc2)")
+        axis.set_ylabel(f"ADC counts ({self.channel})")
         axis.legend(loc="upper right")
         axis.grid(True, alpha=0.3)
         self.figure.tight_layout()
@@ -144,7 +145,7 @@ class PlotView:
                 label=f"Detected peaks ({len(peaks)})",
             )
         axis.set_xlabel("Time (s)")
-        axis.set_ylabel("ADC counts (adc2)")
+        axis.set_ylabel(f"ADC counts ({self.channel})")
         axis.set_title(f"Signal - {len(peaks)} peaks found")
         axis.grid(True, alpha=0.3)
         axis.legend(loc="upper right")
