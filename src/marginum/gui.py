@@ -16,8 +16,14 @@ from .analysis import process_chunks
 from .processing import find_signal_peaks
 from .signal_io import read_signal_chunks
 
+class _Cancelled(Exception):
+    """Raised inside the worker thread when the user presses Stop."""
+
+
 class SignalAnalyzerApp:
     SAMPLE_RATE_HZ = 50_000
+    LIVE_REFRESH_SECONDS = 2.0  # min gap between live redraws (faster slows the run)
+    LIVE_MAX_POINTS = 2_000  # max points drawn live (keeps redraws cheap)
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -30,7 +36,7 @@ class SignalAnalyzerApp:
         self.chunk_size = tk.StringVar(value="1000000")
         self.overlap = tk.StringVar(value="200000")
         self.height = tk.StringVar(value="60")
-        self.distance = tk.StringVar(value="25000")
+        self.distance = tk.StringVar(value="0.5")  # seconds
         self.preview_samples = tk.StringVar(value="200000")
         self.status = tk.StringVar(value="")
         self.progress_detail = tk.StringVar(value="")
@@ -51,7 +57,14 @@ class SignalAnalyzerApp:
         self.selected_peak_index = -1
         self.navigation_busy = False
         self.start_button: ttk.Button
+        self.stop_button: ttk.Button
+        self.browse_buttons: list[ttk.Button] = []
+        self.cancel_event = threading.Event()
+        self.running = False
+        self.run_settings: dict[str, int | float | str | bool] = {}
+        self.show_live = tk.BooleanVar(value=True)
         self.figure = Figure(figsize=(8, 6), dpi=100)
+        self.live_line = None
         self.canvas: FigureCanvasTkAgg
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self._build()
@@ -82,7 +95,7 @@ class SignalAnalyzerApp:
 
         self._path_row(controls, 0, "Input CSV", self.input_path, self._choose_input)
         self._entry_row(controls, 1, "Peak height", self.height)
-        self._entry_row(controls, 2, "Peak distance", self.distance)
+        self._entry_row(controls, 2, "Peak distance (s)", self.distance)
 
         self.advanced_button = ttk.Label(
             controls,
@@ -106,12 +119,25 @@ class SignalAnalyzerApp:
         self._entry_row(self.advanced_frame, 2, "Overlap", self.overlap)
         self._entry_row(self.advanced_frame, 3, "Preview samples", self.preview_samples)
 
+        run_row = self.run_row = ttk.Frame(controls)
+        run_row.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(16, 8))
+        run_row.columnconfigure(0, weight=3)
+        run_row.columnconfigure(1, weight=1)
         self.start_button = ttk.Button(
-            controls, text="Run analysis", command=self._start
+            run_row, text="Run analysis", command=self._start
         )
-        self.start_button.grid(
-            row=7, column=0, columnspan=3, sticky="ew", pady=(16, 8)
+        self.start_button.grid(row=0, column=0, sticky="ew")
+        self.stop_button = ttk.Button(
+            run_row, text="Stop", command=self._stop, state=tk.DISABLED
         )
+        self.stop_button.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        self.live_check = ttk.Checkbutton(
+            run_row, text="Show live plot (slower)", variable=self.show_live
+        )
+        self.live_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.root.bind("<Escape>", lambda _event: self._stop())
+        self.input_path.trace_add("write", lambda *_: self._refresh_run_state())
+        self._refresh_run_state()
         self.progress_bar = ttk.Progressbar(
             controls, variable=self.progress, maximum=100, mode="determinate"
         )
@@ -147,6 +173,8 @@ class SignalAnalyzerApp:
             row=14, column=0, columnspan=3, sticky="w", pady=(4, 0)
         )
         self.advanced_frame.grid_remove()
+        self.summary.trace_add("write", lambda *_: self._refresh_results_visibility())
+        self._refresh_results_visibility()
 
         plot_frame = ttk.LabelFrame(self.root, text="Signal visualisation", padding=6)
         plot_frame.grid(row=0, column=1, sticky="nsew", padx=6, pady=12)
@@ -187,7 +215,7 @@ class SignalAnalyzerApp:
             self.advanced_button.configure(text="▶ Advanced settings")
             self.advanced_frame.grid_remove()
         rows = (
-            self.start_button,
+            self.run_row,
             self.progress_bar,
             self.status_label,
             self.progress_detail_label,
@@ -198,6 +226,8 @@ class SignalAnalyzerApp:
         )
         for index, widget in enumerate(rows, start=7 + offset):
             widget.grid_configure(row=index)
+        # grid_configure re-shows hidden widgets, so hide the empty Results block again
+        self._refresh_results_visibility()
 
     def _path_row(
         self,
@@ -213,9 +243,9 @@ class SignalAnalyzerApp:
         ttk.Entry(frame, textvariable=variable, width=22).grid(
             row=row * 2 + 1, column=0, columnspan=2, sticky="ew", padx=(0, 6), pady=(0, 4)
         )
-        ttk.Button(frame, text="Browse", command=command).grid(
-            row=row * 2 + 1, column=2, pady=(0, 4)
-        )
+        browse = ttk.Button(frame, text="Browse", command=command)
+        browse.grid(row=row * 2 + 1, column=2, pady=(0, 4))
+        self.browse_buttons.append(browse)
 
     def _entry_row(
         self, frame: ttk.Frame, row: int, label: str, variable: tk.StringVar
@@ -268,24 +298,29 @@ class SignalAnalyzerApp:
                 "chunk_size": int(self.chunk_size.get()),
                 "overlap": int(self.overlap.get()),
                 "height": float(self.height.get()),
-                "distance": int(self.distance.get()),
+                "distance": round(float(self.distance.get()) * self.SAMPLE_RATE_HZ),
                 "preview_samples": int(self.preview_samples.get()),
+                "show_live": self.show_live.get(),
+                "input_path": self.input_path.get(),
             }
             if (
                 settings["chunk_size"] <= 0
                 or settings["overlap"] < 0
                 or settings["preview_samples"] <= 0
+                or settings["distance"] <= 0
             ):
                 raise ValueError
         except ValueError:
             messagebox.showerror(
                 "Invalid settings",
                 "Chunk size and preview samples must be positive; overlap must "
-                "be zero or greater; height and distance must be numeric.",
+                "be zero or greater; height must be numeric; distance must be a positive number of seconds.",
             )
             return
 
-        self.start_button.configure(state=tk.DISABLED)
+        self.run_settings = settings  # peak views reuse exactly what the run used
+        self.cancel_event.clear()
+        self._set_running(True)
         self.progress.set(0)
         self.last_progress_percent = 0
         self.status.set("Processing signal... 0%")
@@ -297,7 +332,16 @@ class SignalAnalyzerApp:
         self._clear_cache()
         self.selected_peak_index = -1
         self._set_navigation_enabled(False)
-        self.peak_position.set("Detecting peaks...")
+        self.peak_position.set("")
+        self.summary.set("")  # hide the previous run's results
+        self.live_line = None
+        self.figure.clear()
+        if not settings["show_live"]:
+            self.figure.text(
+                0.5, 0.5, "Live plot is off. The signal appears when analysis finishes.",
+                ha="center", va="center",
+            )
+        self.canvas.draw_idle()
         threading.Thread(
             target=self._process,
             args=(settings, started_at),
@@ -309,20 +353,24 @@ class SignalAnalyzerApp:
     ) -> None:
         try:
             preview_size = int(settings["preview_samples"])
+            show_live = bool(settings["show_live"])
             preview_parts: list[np.ndarray] = []
             preview_rows = 0
             live_values: list[np.ndarray] = []
             overview_indices: list[np.ndarray] = []
             overview_values: list[np.ndarray] = []
             overview_total_samples = 0
-            last_live_update = 0
+            last_live_update = 0.0
             file_progress = 0
 
             def update(chunk_number: int, rows: int) -> None:
                 nonlocal last_live_update
-                if rows - last_live_update < 5_000_000 and chunk_number != 1:
+                if not show_live:
                     return
-                last_live_update = rows
+                now = time.perf_counter()
+                if now - last_live_update < self.LIVE_REFRESH_SECONDS and chunk_number != 1:
+                    return
+                last_live_update = now
                 live_signal = (
                     np.concatenate(live_values) if live_values else np.empty(0)
                 )
@@ -351,12 +399,14 @@ class SignalAnalyzerApp:
 
                 for chunk_number, chunk in enumerate(
                     read_signal_chunks(
-                        self.input_path.get(),
+                        str(settings["input_path"]),
                         chunk_size=int(settings["chunk_size"]),
                         progress=update_file_progress,
                     ),
                     start=1,
                 ):
+                    if self.cancel_event.is_set():
+                        raise _Cancelled
                     chunk_start = overview_total_samples
                     chunk_path = self.cache_dir / f"chunk-{chunk_number:06d}.npy"
                     np.save(chunk_path, chunk)
@@ -372,7 +422,8 @@ class SignalAnalyzerApp:
                         0, len(chunk), step
                     )
                     sampled_values = chunk[::step]
-                    live_values.append(sampled_values)
+                    if show_live:
+                        live_values.append(sampled_values)
                     overview_indices.append(sampled_indices)
                     overview_values.append(sampled_values)
                     overview_total_samples += len(chunk)
@@ -422,6 +473,8 @@ class SignalAnalyzerApp:
                 overview_total_samples,
                 time.perf_counter() - started_at,
             )
+        except _Cancelled:
+            self.root.after(0, self._cancelled)
         except (OSError, ValueError, IndexError) as error:
             self.root.after(0, self._failed, str(error))
 
@@ -449,15 +502,37 @@ class SignalAnalyzerApp:
         self.elapsed_time.set(f"Processing time: {int(elapsed)} s")
         self.root.after(100, self._update_elapsed_time)
 
+    def _decimate_for_display(self, signal: np.ndarray) -> np.ndarray:
+        """Shrink to about LIVE_MAX_POINTS using per-bucket min/max, so narrow
+        peaks stay visible while the redraw cost stays constant."""
+        buckets = self.LIVE_MAX_POINTS // 2
+        size = len(signal) // buckets
+        if size < 2:
+            return signal
+        blocks = signal[: size * buckets].reshape(buckets, size)
+        return np.column_stack((blocks.min(axis=1), blocks.max(axis=1))).ravel()
+
     def _draw_live_plot(self, signal: np.ndarray, rows: int) -> None:
-        self.figure.clear()
-        axis = self.figure.add_subplot(111)
-        axis.plot(signal, color="#2563eb", linewidth=0.8)
+        signal = self._decimate_for_display(signal)
+        # The points are spread evenly over everything scanned so far.
+        live_time = np.linspace(0, rows / self.SAMPLE_RATE_HZ, len(signal))
+        if self.live_line is None:
+            self.figure.clear()
+            axis = self.figure.add_subplot(111)
+            (self.live_line,) = axis.plot(
+                live_time, signal, color="#2563eb", linewidth=0.8
+            )
+            axis.set_xlabel("Time (s)")
+            axis.set_ylabel("ADC counts (adc2)")
+            axis.grid(alpha=0.25)
+            axis.set_title(f"Live signal overview ({rows:,} samples scanned)")
+            self.figure.tight_layout()  # after the title so it reserves room for it
+        else:
+            self.live_line.set_data(live_time, signal)
+            axis = self.live_line.axes
+            axis.relim()
+            axis.autoscale_view()
         axis.set_title(f"Live signal overview ({rows:,} samples scanned)")
-        axis.set_xlabel("Sample index")
-        axis.set_ylabel("Response")
-        axis.grid(alpha=0.25)
-        self.figure.tight_layout()
         self.canvas.draw_idle()
 
     def _finished(
@@ -506,7 +581,7 @@ class SignalAnalyzerApp:
             self.peak_position.set("No peaks detected")
             self._set_navigation_enabled(False)
             self._draw_plot(raw, baseline, flat, clean, peaks, offset=0)
-        self.start_button.configure(state=tk.NORMAL)
+        self._set_running(False)
 
     def _navigate_peak(self, direction: int) -> None:
         if not len(self.full_peaks) or self.navigation_busy:
@@ -519,7 +594,6 @@ class SignalAnalyzerApp:
         self.navigation_busy = True
         self.previous_button.configure(state=tk.DISABLED)
         self.next_button.configure(state=tk.DISABLED)
-        self.status.set("Loading selected peak...")
         selected_index = self.selected_peak_index
         threading.Thread(
             target=self._load_selected_peak,
@@ -549,10 +623,11 @@ class SignalAnalyzerApp:
         sample_values: np.ndarray,
         total_samples: int,
     ) -> None:
+        self.live_line = None
         self.figure.clear()
         axis = self.figure.add_subplot(111)
         axis.plot(
-            sample_indices,
+            sample_indices / self.SAMPLE_RATE_HZ,
             sample_values,
             color="#555555",
             linewidth=0.5,
@@ -565,7 +640,7 @@ class SignalAnalyzerApp:
         valid = peak_indices < len(sample_values)
         if np.any(valid):
             axis.scatter(
-                peak_positions[valid],
+                peak_positions[valid] / self.SAMPLE_RATE_HZ,
                 sample_values[peak_indices[valid]],
                 color="red",
                 s=15,
@@ -573,8 +648,8 @@ class SignalAnalyzerApp:
                 label=f"{len(peak_positions)} peaks",
             )
         axis.set_title(f"Signal overview - {len(self.full_peaks):,} peaks detected")
-        axis.set_xlabel("Sample index")
-        axis.set_ylabel("Response")
+        axis.set_xlabel("Time (s)")
+        axis.set_ylabel("ADC counts (adc2)")
         axis.legend(loc="upper right")
         axis.grid(True, alpha=0.3)
         self.figure.tight_layout()
@@ -600,24 +675,35 @@ class SignalAnalyzerApp:
 
     def _update_peak_position(self) -> None:
         sample = int(self.full_peaks[self.selected_peak_index])
-        elapsed_seconds = sample / self.SAMPLE_RATE_HZ
         self.peak_position.set(
             f"Peak {self.selected_peak_index + 1} of {len(self.full_peaks)}\n"
-            f"Sample: {sample:,}\n"
-            f"Time: {elapsed_seconds:.2f} s"
+            f"Sample: {sample:,}"
         )
 
     def _load_selected_peak(self, selected_index: int) -> None:
+        try:
+            self._load_selected_peak_unchecked(selected_index)
+        except Exception as error:  # always unlock navigation, whatever went wrong
+            self.root.after(0, self._peak_load_failed, str(error))
+
+    def _peak_load_failed(self, message: str) -> None:
+        self.navigation_busy = False
+        self.previous_button.configure(state=tk.NORMAL)
+        self.next_button.configure(state=tk.NORMAL)
+        self.status.set(f"Could not load peak: {message}")
+
+    def _load_selected_peak_unchecked(self, selected_index: int) -> None:
         peak = int(self.full_peaks[selected_index])
-        window = max(1, int(self.preview_samples.get()))
+        settings = self.run_settings
+        window = max(1, int(settings["preview_samples"]))
         start = max(0, peak - window // 2)
         raw = self._read_window(start, start + window)
         if raw.size == 0:
-            return
+            raise ValueError("no samples in the selected window")
         baseline, flat, clean, _ = find_signal_peaks(
             raw,
-            height=float(self.height.get()),
-            distance=int(self.distance.get()),
+            height=float(settings["height"]),
+            distance=int(settings["distance"]),
         )
         visible_peaks = self.full_peaks[
             (self.full_peaks >= start) & (self.full_peaks < start + len(raw))
@@ -649,7 +735,6 @@ class SignalAnalyzerApp:
         self.next_button.configure(state=tk.NORMAL)
         if selected_index == self.selected_peak_index:
             self._draw_plot(raw, baseline, flat, clean, peaks, offset)
-            self.status.set("Selected peak loaded.")
 
     def _read_window(self, start: int, stop: int) -> np.ndarray:
         if self.cached_chunks:
@@ -668,8 +753,8 @@ class SignalAnalyzerApp:
         values: list[np.ndarray] = []
         position = 0
         for chunk in read_signal_chunks(
-            self.input_path.get(),
-            chunk_size=max(1, min(int(self.chunk_size.get()), stop - start)),
+            str(self.run_settings["input_path"]),
+            chunk_size=max(1, min(int(self.run_settings["chunk_size"]), stop - start)),
         ):
             chunk_stop = position + len(chunk)
             if chunk_stop > start and position < stop:
@@ -681,13 +766,62 @@ class SignalAnalyzerApp:
                 break
         return np.concatenate(values) if values else np.empty(0, dtype=float)
 
+    def _stop(self) -> None:
+        """Ask the worker to stop; it replies with _cancelled once it has."""
+        if str(self.stop_button["state"]) == tk.DISABLED:
+            return
+        self.cancel_event.set()
+        self.stop_button.configure(state=tk.DISABLED)
+        self.status.set("Stopping...")
+
+    def _cancelled(self) -> None:
+        """Return to the initial state so the user can pick a file and rerun."""
+        self.processing_started_at = None
+        self._clear_cache()
+        self.full_peaks = np.empty(0, dtype=int)
+        self.selected_peak_index = -1
+        self.progress.set(0)
+        self.last_progress_percent = 0
+        self.progress_detail.set("")
+        self.elapsed_time.set("")
+        self.summary.set("")
+        self.peak_position.set("No peaks selected")
+        self._set_navigation_enabled(False)
+        self.figure.clear()
+        self._draw_empty_plot()
+        self.status.set("")
+        self._set_running(False)
+
     def _failed(self, message: str) -> None:
         self.status.set(f"Error: {message}")
         self.progress_detail.set("")
         self.processing_started_at = None
+        self._clear_cache()  # a failed run must not leave a partial cache on disk
         self._set_navigation_enabled(False)
-        self.start_button.configure(state=tk.NORMAL)
+        self._set_running(False)
         messagebox.showerror("Processing failed", message)
+
+    def _refresh_results_visibility(self) -> None:
+        """Show the Results block only while there are results to show."""
+        for widget in (self.results_separator, self.results_label, self.summary_label):
+            if self.summary.get():
+                widget.grid()
+            else:
+                widget.grid_remove()
+
+    def _refresh_run_state(self) -> None:
+        """Run is only available when a file is chosen and nothing is running."""
+        can_run = not self.running and bool(self.input_path.get().strip())
+        self.start_button.configure(state=tk.NORMAL if can_run else tk.DISABLED)
+
+    def _set_running(self, running: bool) -> None:
+        self.running = running
+        state = tk.DISABLED if running else tk.NORMAL
+        self._refresh_run_state()
+        self.stop_button.configure(state=tk.NORMAL if running else tk.DISABLED)
+        self.live_check.configure(state=state)
+        for button in self.browse_buttons:
+            button.configure(state=state)
 
     def _set_navigation_enabled(self, enabled: bool) -> None:
         state = tk.NORMAL if enabled else tk.DISABLED
@@ -696,6 +830,7 @@ class SignalAnalyzerApp:
         self.overview_button.configure(state=state)
 
     def _draw_empty_plot(self) -> None:
+        self.live_line = None
         axis = self.figure.add_subplot(111)
         axis.text(
             0.5,
@@ -717,10 +852,11 @@ class SignalAnalyzerApp:
         peaks: np.ndarray,
         offset: int = 0,
     ) -> None:
+        self.live_line = None
         self.figure.clear()
-        x = np.arange(len(raw)) + offset
+        x = (np.arange(len(raw)) + offset) / self.SAMPLE_RATE_HZ
         local_peaks = np.asarray(peaks, dtype=int)
-        peak_x = local_peaks + offset
+        peak_x = (local_peaks + offset) / self.SAMPLE_RATE_HZ
         axis = self.figure.add_subplot(111)
         axis.plot(
             x,
@@ -742,8 +878,8 @@ class SignalAnalyzerApp:
                 zorder=4,
                 label=f"Detected peaks ({len(peaks)})",
             )
-        axis.set_xlabel("Sample index")
-        axis.set_ylabel("Response")
+        axis.set_xlabel("Time (s)")
+        axis.set_ylabel("ADC counts (adc2)")
         axis.set_title(f"Signal - {len(peaks)} peaks found")
         axis.grid(True, alpha=0.3)
         axis.legend(loc="upper right")
