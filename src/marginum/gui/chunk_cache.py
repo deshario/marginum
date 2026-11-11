@@ -6,6 +6,8 @@ from pathlib import Path
 
 import numpy as np
 
+CACHE_PREFIX = "marginum-signal-cache-"
+
 
 class ChunkCache:
     """Signal chunks saved as .npy files in a temp dir, for fast windowed reads."""
@@ -21,7 +23,22 @@ class ChunkCache:
         self.chunks = []
 
     def create(self) -> None:
-        self.directory = Path(tempfile.mkdtemp(prefix="marginum-signal-cache-"))
+        self.directory = Path(tempfile.mkdtemp(prefix=CACHE_PREFIX))
+
+    @staticmethod
+    def remove_leftovers(root: Path | None = None) -> int:
+        """Delete cache folders left behind by a killed or crashed run.
+
+        Call this once at startup, before this window makes its own cache. It
+        assumes one window at a time: a second window started later would delete
+        the first window's cache. Returns how many folders were removed.
+        """
+        root = Path(tempfile.gettempdir()) if root is None else root
+        removed = 0
+        for path in root.glob(f"{CACHE_PREFIX}*"):
+            shutil.rmtree(path, ignore_errors=True)
+            removed += 1
+        return removed
 
     def save(self, chunk_number: int, chunk_start: int, chunk: np.ndarray) -> None:
         chunk_path = self.directory / f"chunk-{chunk_number:06d}.npy"
