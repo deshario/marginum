@@ -49,7 +49,9 @@ class PeakNavigator:
 
     def navigate(self, direction: int) -> None:
         app = self.app
-        if not len(app.full_peaks) or self.busy:
+        if self.busy:  # a peak is still loading; ignore the click
+            return
+        if not len(app.full_peaks):
             app.status.set("No detected peaks to navigate.")
             return
         self.selected_index = (self.selected_index + direction) % len(app.full_peaks)
@@ -59,8 +61,6 @@ class PeakNavigator:
     def start_load(self) -> None:
         """Load the window around the selected peak without blocking the UI."""
         self.busy = True
-        self.previous_button.configure(state=tk.DISABLED)
-        self.next_button.configure(state=tk.DISABLED)
         selected_index = self.selected_index
         threading.Thread(
             target=self._load_selected_peak,
@@ -103,8 +103,6 @@ class PeakNavigator:
 
     def _peak_load_failed(self, message: str) -> None:
         self.busy = False
-        self.previous_button.configure(state=tk.NORMAL)
-        self.next_button.configure(state=tk.NORMAL)
         self.app.status.set(f"Could not load peak: {message}")
 
     def _load_selected_peak_unchecked(self, selected_index: int) -> None:
@@ -147,7 +145,5 @@ class PeakNavigator:
         offset: int,
     ) -> None:
         self.busy = False
-        self.previous_button.configure(state=tk.NORMAL)
-        self.next_button.configure(state=tk.NORMAL)
         if selected_index == self.selected_index:
             self.app.plot.draw_signal(raw, baseline, flat, clean, peaks, offset)
