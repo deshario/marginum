@@ -16,6 +16,7 @@ from ..signal_io import read_signal_chunks
 from .config import LIVE_REFRESH_SECONDS, SAMPLE_RATE_HZ
 from .peak_navigator import PeakNavigator
 from .plot_view import PlotView
+from .settings_panel import SettingsPanel
 
 class _Cancelled(Exception):
     """Raised inside the worker thread when the user presses Stop."""
@@ -41,7 +42,6 @@ class SignalAnalyzerApp:
         self.summary = tk.StringVar(value="")
         self.progress = tk.DoubleVar()
         self.processing_seconds = 0.0
-        self.advanced_expanded = False
         self.last_progress_percent = 0
         self.processing_started_at: float | None = None
         self.full_peaks = np.empty(0, dtype=int)
@@ -50,15 +50,13 @@ class SignalAnalyzerApp:
         self.overview_total_samples = 0
         self.cache_dir: Path | None = None
         self.cached_chunks: list[tuple[int, int, Path]] = []
-        self.start_button: ttk.Button
-        self.stop_button: ttk.Button
-        self.browse_buttons: list[ttk.Button] = []
         self.cancel_event = threading.Event()
         self.running = False
         self.run_settings: dict[str, int | float | str | bool] = {}
         self.show_live = tk.BooleanVar(value=True)
         self.plot: PlotView
         self.navigator: PeakNavigator
+        self.settings_panel: SettingsPanel
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self._build()
 
@@ -84,88 +82,45 @@ class SignalAnalyzerApp:
         )
         controls.configure(width=250)
         controls.grid_propagate(False)
-        controls.columnconfigure(1, weight=1)
+        controls.columnconfigure(0, weight=1)
 
-        self._path_row(controls, 0, "Input CSV", self.input_path, self._choose_input)
-        self._entry_row(controls, 1, "Peak height", self.height)
-        self._entry_row(controls, 2, "Peak distance (s)", self.distance)
-
-        self.advanced_button = ttk.Label(
-            controls,
-            text="▶ Advanced settings",
-            cursor="hand2",
-        )
-        self.advanced_button.bind("<Button-1>", lambda _event: self._toggle_advanced())
-        self.advanced_button.grid(
-            row=6, column=0, columnspan=3, sticky="w", pady=(8, 0)
-        )
-        self.advanced_frame = ttk.Frame(controls)
-        self.advanced_frame.columnconfigure(1, weight=1)
-        self._path_row(
-            self.advanced_frame,
-            0,
-            "Output peaks",
-            self.output_path,
-            self._choose_output,
-        )
-        self._entry_row(self.advanced_frame, 1, "Chunk size", self.chunk_size)
-        self._entry_row(self.advanced_frame, 2, "Overlap", self.overlap)
-        self._entry_row(self.advanced_frame, 3, "Preview samples", self.preview_samples)
-
-        run_row = self.run_row = ttk.Frame(controls)
-        run_row.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(16, 8))
-        run_row.columnconfigure(0, weight=3)
-        run_row.columnconfigure(1, weight=1)
-        self.start_button = ttk.Button(
-            run_row, text="Run analysis", command=self._start
-        )
-        self.start_button.grid(row=0, column=0, sticky="ew")
-        self.stop_button = ttk.Button(
-            run_row, text="Stop", command=self._stop, state=tk.DISABLED
-        )
-        self.stop_button.grid(row=0, column=1, sticky="ew", padx=(6, 0))
-        self.live_check = ttk.Checkbutton(
-            run_row, text="Show live plot (slower)", variable=self.show_live
-        )
-        self.live_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.settings_panel = SettingsPanel(controls, self)
+        self.settings_panel.frame.grid(row=0, column=0, sticky="ew")
         self.root.bind("<Escape>", lambda _event: self._stop())
-        self.input_path.trace_add("write", lambda *_: self._refresh_run_state())
-        self._refresh_run_state()
+
+        status_frame = ttk.Frame(controls)
+        status_frame.grid(row=1, column=0, sticky="ew")
+        status_frame.columnconfigure(0, weight=1)
         self.progress_bar = ttk.Progressbar(
-            controls, variable=self.progress, maximum=100, mode="determinate"
+            status_frame, variable=self.progress, maximum=100, mode="determinate"
         )
-        self.progress_bar.grid(row=8, column=0, columnspan=3, sticky="ew")
+        self.progress_bar.grid(row=0, column=0, sticky="ew")
         self.status_label = ttk.Label(
-            controls, textvariable=self.status, wraplength=250, justify=tk.LEFT
+            status_frame, textvariable=self.status, wraplength=250, justify=tk.LEFT
         )
-        self.status_label.grid(row=9, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        self.status_label.grid(row=1, column=0, sticky="w", pady=(12, 0))
         self.progress_detail_label = ttk.Label(
-            controls,
+            status_frame,
             textvariable=self.progress_detail,
             wraplength=250,
             justify=tk.LEFT,
             font=("TkDefaultFont", 9),
         )
-        self.progress_detail_label.grid(row=10, column=0, columnspan=3, sticky="w")
+        self.progress_detail_label.grid(row=2, column=0, sticky="w")
         self.elapsed_label = ttk.Label(
-            controls,
+            status_frame,
             textvariable=self.elapsed_time,
             font=("TkDefaultFont", 9),
         )
-        self.elapsed_label.grid(row=11, column=0, columnspan=3, sticky="w")
-        self.results_separator = ttk.Separator(controls, orient=tk.HORIZONTAL)
-        self.results_separator.grid(
-            row=12, column=0, columnspan=3, sticky="ew", pady=12
-        )
-        self.results_label = ttk.Label(controls, text="Results:")
-        self.results_label.grid(row=13, column=0, columnspan=3, sticky="w")
+        self.elapsed_label.grid(row=3, column=0, sticky="w")
+        self.results_separator = ttk.Separator(status_frame, orient=tk.HORIZONTAL)
+        self.results_separator.grid(row=4, column=0, sticky="ew", pady=12)
+        self.results_label = ttk.Label(status_frame, text="Results:")
+        self.results_label.grid(row=5, column=0, sticky="w")
         self.summary_label = ttk.Label(
-            controls, textvariable=self.summary, wraplength=220, justify=tk.LEFT
+            status_frame, textvariable=self.summary, wraplength=220, justify=tk.LEFT
         )
-        self.summary_label.grid(
-            row=14, column=0, columnspan=3, sticky="w", pady=(4, 0)
-        )
-        self.advanced_frame.grid_remove()
+        self.summary_label.grid(row=6, column=0, sticky="w", pady=(4, 0))
         self.summary.trace_add("write", lambda *_: self._refresh_results_visibility())
         self._refresh_results_visibility()
 
@@ -176,61 +131,6 @@ class SignalAnalyzerApp:
         self.plot = PlotView(plot_frame)
         self.navigator = PeakNavigator(plot_frame, self)
         self.plot.draw_empty()
-
-    def _toggle_advanced(self) -> None:
-        self.advanced_expanded = not self.advanced_expanded
-        offset = 0
-        if self.advanced_expanded:
-            self.advanced_button.configure(text="▼ Advanced settings")
-            self.advanced_frame.grid(
-                row=7, column=0, columnspan=3, sticky="ew", pady=(4, 0)
-            )
-            offset = 8
-        else:
-            self.advanced_button.configure(text="▶ Advanced settings")
-            self.advanced_frame.grid_remove()
-        rows = (
-            self.run_row,
-            self.progress_bar,
-            self.status_label,
-            self.progress_detail_label,
-            self.elapsed_label,
-            self.results_separator,
-            self.results_label,
-            self.summary_label,
-        )
-        for index, widget in enumerate(rows, start=7 + offset):
-            widget.grid_configure(row=index)
-        # grid_configure re-shows hidden widgets, so hide the empty Results block again
-        self._refresh_results_visibility()
-
-    def _path_row(
-        self,
-        frame: ttk.Frame,
-        row: int,
-        label: str,
-        variable: tk.StringVar,
-        command,
-    ) -> None:
-        ttk.Label(frame, text=f"{label}:").grid(
-            row=row * 2, column=0, columnspan=3, sticky="w", pady=(6, 2)
-        )
-        ttk.Entry(frame, textvariable=variable, width=22).grid(
-            row=row * 2 + 1, column=0, columnspan=2, sticky="ew", padx=(0, 6), pady=(0, 4)
-        )
-        browse = ttk.Button(frame, text="Browse", command=command)
-        browse.grid(row=row * 2 + 1, column=2, pady=(0, 4))
-        self.browse_buttons.append(browse)
-
-    def _entry_row(
-        self, frame: ttk.Frame, row: int, label: str, variable: tk.StringVar
-    ) -> None:
-        ttk.Label(frame, text=f"{label}:").grid(
-            row=row * 2, column=0, columnspan=3, sticky="w", pady=(6, 2)
-        )
-        ttk.Entry(frame, textvariable=variable, width=12).grid(
-            row=row * 2 + 1, column=0, columnspan=3, sticky="ew", pady=(0, 4)
-        )
 
     def _choose_input(self) -> None:
         path = filedialog.askopenfilename(
@@ -254,15 +154,6 @@ class SignalAnalyzerApp:
             self.navigator.position.set("No peaks selected")
             self.plot.draw_empty()
             self.status.set("")
-
-    def _choose_output(self) -> None:
-        path = filedialog.asksaveasfilename(
-            title="Save peak positions",
-            defaultextension=".txt",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-        )
-        if path:
-            self.output_path.set(path)
 
     def _start(self) -> None:
         if not self.input_path.get():
@@ -564,10 +455,10 @@ class SignalAnalyzerApp:
 
     def _stop(self) -> None:
         """Ask the worker to stop; it replies with _cancelled once it has."""
-        if str(self.stop_button["state"]) == tk.DISABLED:
+        if str(self.settings_panel.stop_button["state"]) == tk.DISABLED:
             return
         self.cancel_event.set()
-        self.stop_button.configure(state=tk.DISABLED)
+        self.settings_panel.stop_button.configure(state=tk.DISABLED)
         self.status.set("Stopping...")
 
     def _cancelled(self) -> None:
@@ -605,19 +496,10 @@ class SignalAnalyzerApp:
             else:
                 widget.grid_remove()
 
-    def _refresh_run_state(self) -> None:
-        """Run is only available when a file is chosen and nothing is running."""
-        can_run = not self.running and bool(self.input_path.get().strip())
-        self.start_button.configure(state=tk.NORMAL if can_run else tk.DISABLED)
-
     def _set_running(self, running: bool) -> None:
         self.running = running
-        state = tk.DISABLED if running else tk.NORMAL
-        self._refresh_run_state()
-        self.stop_button.configure(state=tk.NORMAL if running else tk.DISABLED)
-        self.live_check.configure(state=state)
-        for button in self.browse_buttons:
-            button.configure(state=state)
+        self.settings_panel.refresh_run_state()
+        self.settings_panel.set_running(running)
 
 def main() -> None:
     root = tk.Tk()
