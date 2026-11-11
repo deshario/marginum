@@ -22,6 +22,17 @@ class SettingsPanel:
         self._path_row(frame, 0, "Input CSV", app.input_path, app._choose_input)
         self._entry_row(frame, 1, "Peak height", app.height)
         self._entry_row(frame, 2, "Peak distance (s)", app.distance)
+        ttk.Label(frame, text="Channel:").grid(
+            row=6, column=0, columnspan=3, sticky="w", pady=(6, 2)
+        )
+        self.channel_box = ttk.Combobox(
+            frame, textvariable=app.channel, values=("adc1", "adc2"), state="readonly"
+        )
+        self.channel_box.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(0, 4))
+        self.live_check = ttk.Checkbutton(
+            frame, text="Show live plot (slower)", variable=app.show_live
+        )
+        self.live_check.grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
         self.advanced_button = ttk.Label(
             frame,
@@ -30,7 +41,7 @@ class SettingsPanel:
         )
         self.advanced_button.bind("<Button-1>", lambda _event: self._toggle_advanced())
         self.advanced_button.grid(
-            row=6, column=0, columnspan=3, sticky="w", pady=(8, 0)
+            row=9, column=0, columnspan=3, sticky="w", pady=(8, 0)
         )
         self.advanced_frame = ttk.Frame(frame)
         self.advanced_frame.columnconfigure(1, weight=1)
@@ -46,7 +57,7 @@ class SettingsPanel:
         self._entry_row(self.advanced_frame, 3, "Preview samples", app.preview_samples)
 
         run_row = ttk.Frame(frame)
-        run_row.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(16, 8))
+        run_row.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(16, 8))
         run_row.columnconfigure(0, weight=3)
         run_row.columnconfigure(1, weight=1)
         self.start_button = ttk.Button(
@@ -57,10 +68,6 @@ class SettingsPanel:
             run_row, text="Stop", command=app._stop, state=tk.DISABLED
         )
         self.stop_button.grid(row=0, column=1, sticky="ew", padx=(6, 0))
-        self.live_check = ttk.Checkbutton(
-            run_row, text="Show live plot (slower)", variable=app.show_live
-        )
-        self.live_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
         app.input_path.trace_add("write", lambda *_: self.refresh_run_state())
         self.refresh_run_state()
         self.advanced_frame.grid_remove()
@@ -70,7 +77,7 @@ class SettingsPanel:
         if self.advanced_expanded:
             self.advanced_button.configure(text="▼ Advanced settings")
             self.advanced_frame.grid(
-                row=7, column=0, columnspan=3, sticky="ew", pady=(4, 0)
+                row=10, column=0, columnspan=3, sticky="ew", pady=(4, 0)
             )
         else:
             self.advanced_button.configure(text="▶ Advanced settings")
@@ -122,5 +129,6 @@ class SettingsPanel:
         state = tk.DISABLED if running else tk.NORMAL
         self.stop_button.configure(state=tk.NORMAL if running else tk.DISABLED)
         self.live_check.configure(state=state)
+        self.channel_box.configure(state="disabled" if running else "readonly")
         for button in self.browse_buttons:
             button.configure(state=state)

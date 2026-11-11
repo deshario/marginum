@@ -63,6 +63,7 @@ def run_analysis(
                 read_signal_chunks(
                     str(settings["input_path"]),
                     chunk_size=int(settings["chunk_size"]),
+                    column=str(settings["column"]),
                     progress=update_file_progress,
                 ),
                 start=1,

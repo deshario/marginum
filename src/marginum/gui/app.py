@@ -28,6 +28,7 @@ class SignalAnalyzerApp:
         self.overlap = tk.StringVar(value="200000")
         self.height = tk.StringVar(value="60")
         self.distance = tk.StringVar(value="0.5")  # seconds
+        self.channel = tk.StringVar(value="adc2")
         self.preview_samples = tk.StringVar(value="200000")
         self.status = tk.StringVar(value="")
         self.progress_detail = tk.StringVar(value="")
@@ -86,6 +87,7 @@ class SignalAnalyzerApp:
             status_frame, variable=self.progress, maximum=100, mode="determinate"
         )
         self.progress_bar.grid(row=0, column=0, sticky="ew")
+        self.progress_bar.grid_remove()  # only shown once a run starts
         self.status_label = ttk.Label(
             status_frame, textvariable=self.status, wraplength=250, justify=tk.LEFT
         )
@@ -133,6 +135,7 @@ class SignalAnalyzerApp:
             if self.output_path.get() == "peaks.txt":
                 self.output_path.set(str(Path(path).with_name("peaks.txt")))
             self.progress.set(0)
+            self.progress_bar.grid_remove()
             self.last_progress_percent = 0
             self.progress_detail.set("")
             self.elapsed_time.set("")
@@ -159,6 +162,7 @@ class SignalAnalyzerApp:
                 "preview_samples": int(self.preview_samples.get()),
                 "show_live": self.show_live.get(),
                 "input_path": self.input_path.get(),
+                "column": self.channel.get(),
             }
             if (
                 settings["chunk_size"] <= 0
@@ -176,9 +180,11 @@ class SignalAnalyzerApp:
             return
 
         self.run_settings = settings  # peak views reuse exactly what the run used
+        self.plot.channel = str(settings["column"])
         self.cancel_event.clear()
         self._set_running(True)
         self.progress.set(0)
+        self.progress_bar.grid()
         self.last_progress_percent = 0
         self.status.set("Processing signal... 0%")
         self.progress_detail.set("Preparing signal data...")
