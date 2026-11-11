@@ -6,8 +6,6 @@ from pathlib import Path
 
 import numpy as np
 
-from ..signal_io import read_signal_chunks
-
 
 class ChunkCache:
     """Signal chunks saved as .npy files in a temp dir, for fast windowed reads."""
@@ -30,34 +28,15 @@ class ChunkCache:
         np.save(chunk_path, chunk)
         self.chunks.append((chunk_start, chunk_start + len(chunk), chunk_path))
 
-    def read_window(
-        self, start: int, stop: int, run_settings: dict[str, int | float | str | bool]
-    ) -> np.ndarray:
-        if self.chunks:
-            values: list[np.ndarray] = []
-            for chunk_start, chunk_stop, chunk_path in self.chunks:
-                if chunk_stop <= start:
-                    continue
-                if chunk_start >= stop:
-                    break
-                chunk = np.load(chunk_path, mmap_mode="r")
-                left = max(0, start - chunk_start)
-                right = min(len(chunk), stop - chunk_start)
-                values.append(np.asarray(chunk[left:right]))
-            return np.concatenate(values) if values else np.empty(0, dtype=float)
-
+    def read_window(self, start: int, stop: int) -> np.ndarray:
         values: list[np.ndarray] = []
-        position = 0
-        for chunk in read_signal_chunks(
-            str(run_settings["input_path"]),
-            chunk_size=max(1, min(int(run_settings["chunk_size"]), stop - start)),
-        ):
-            chunk_stop = position + len(chunk)
-            if chunk_stop > start and position < stop:
-                left = max(0, start - position)
-                right = min(len(chunk), stop - position)
-                values.append(chunk[left:right])
-            position = chunk_stop
-            if position >= stop:
+        for chunk_start, chunk_stop, chunk_path in self.chunks:
+            if chunk_stop <= start:
+                continue
+            if chunk_start >= stop:
                 break
+            chunk = np.load(chunk_path, mmap_mode="r")
+            left = max(0, start - chunk_start)
+            right = min(len(chunk), stop - chunk_start)
+            values.append(np.asarray(chunk[left:right]))
         return np.concatenate(values) if values else np.empty(0, dtype=float)

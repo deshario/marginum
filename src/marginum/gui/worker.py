@@ -46,13 +46,7 @@ def run_analysis(
             live_signal = (
                 np.concatenate(live_values) if live_values else np.empty(0)
             )
-            app.root.after(
-                0,
-                app._live_update,
-                live_signal,
-                rows,
-                file_progress,
-            )
+            app.root.after(0, app._live_update, live_signal, rows)
 
         def chunks():
             nonlocal preview_rows, file_progress, overview_total_samples
@@ -63,11 +57,7 @@ def run_analysis(
                     99,
                     max(1, int(read_bytes * 100 / max(total_bytes, 1))),
                 )
-                app.root.after(
-                    0,
-                    app._reading_update,
-                    file_progress,
-                )
+                app.root.after(0, app._set_progress, file_progress)
 
             for chunk_number, chunk in enumerate(
                 read_signal_chunks(
@@ -111,11 +101,9 @@ def run_analysis(
             distance=int(settings["distance"]),
         )
         preview = np.concatenate(preview_parts) if preview_parts else np.empty(0)
-        if len(preview) > preview_size:
-            preview = preview[:preview_size]
         if preview.size == 0:
             raise ValueError("Signal file contains no samples")
-        baseline, flat, clean, _ = find_signal_peaks(
+        _, _, clean, _ = find_signal_peaks(
             preview,
             height=float(settings["height"]),
             distance=int(settings["distance"]),
@@ -127,8 +115,6 @@ def run_analysis(
             0,
             app._finished,
             preview,
-            baseline,
-            flat,
             clean,
             peaks,
             output,

@@ -34,7 +34,6 @@ class SignalAnalyzerApp:
         self.elapsed_time = tk.StringVar(value="")
         self.summary = tk.StringVar(value="")
         self.progress = tk.DoubleVar()
-        self.processing_seconds = 0.0
         self.last_progress_percent = 0
         self.processing_started_at: float | None = None
         self.full_peaks = np.empty(0, dtype=int)
@@ -203,13 +202,10 @@ class SignalAnalyzerApp:
             daemon=True,
         ).start()
 
-    def _live_update(self, signal: np.ndarray, rows: int, percent: int) -> None:
+    def _live_update(self, signal: np.ndarray, rows: int) -> None:
         self.progress_detail.set(f"{rows:,} rows scanned")
         if signal.size:
             self.plot.draw_live(signal, rows)
-
-    def _reading_update(self, percent: int) -> None:
-        self._set_progress(percent)
 
     def _chunk_progress(self, percent: int, rows: int) -> None:
         self._set_progress(percent)
@@ -230,8 +226,6 @@ class SignalAnalyzerApp:
     def _finished(
         self,
         raw: np.ndarray,
-        baseline: np.ndarray,
-        flat: np.ndarray,
         clean: np.ndarray,
         peaks: np.ndarray,
         output: Path,
@@ -240,7 +234,6 @@ class SignalAnalyzerApp:
         overview_total_samples: int,
         processing_seconds: float,
     ) -> None:
-        self.processing_seconds = processing_seconds
         self.full_peaks = peaks
         self.overview_indices = overview_indices
         self.overview_values = overview_values
@@ -265,7 +258,7 @@ class SignalAnalyzerApp:
         else:
             self.navigator.position.set("No peaks detected")
             self.navigator.set_enabled(False)
-            self.plot.draw_signal(raw, baseline, flat, clean, peaks, offset=0)
+            self.plot.draw_signal(raw, clean, peaks, offset=0)
         self._set_running(False)
 
     def _clear_cache(self) -> None:
@@ -303,7 +296,6 @@ class SignalAnalyzerApp:
         self.summary.set("")
         self.navigator.position.set("No peaks selected")
         self.navigator.set_enabled(False)
-        self.plot.clear()
         self.plot.draw_empty()
         self.status.set("")
         self._set_running(False)

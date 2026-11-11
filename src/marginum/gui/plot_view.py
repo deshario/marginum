@@ -27,11 +27,12 @@ class PlotView:
 
     def draw_empty(self) -> None:
         self.live_line = None
+        self.figure.clear()
         axis = self.figure.add_subplot(111)
         axis.text(
             0.5,
             0.5,
-            "Choose a signal CSV file",
+            "Choose a signal CSV file, then press Run analysis",
             ha="center",
             va="center",
             transform=axis.transAxes,
@@ -112,8 +113,6 @@ class PlotView:
     def draw_signal(
         self,
         raw: np.ndarray,
-        baseline: np.ndarray,
-        flat: np.ndarray,
         clean: np.ndarray,
         peaks: np.ndarray,
         offset: int = 0,

@@ -111,10 +111,10 @@ class PeakNavigator:
         settings = app.run_settings
         window = max(1, int(settings["preview_samples"]))
         start = max(0, peak - window // 2)
-        raw = app.cache.read_window(start, start + window, app.run_settings)
+        raw = app.cache.read_window(start, start + window)
         if raw.size == 0:
             raise ValueError("no samples in the selected window")
-        baseline, flat, clean, _ = find_signal_peaks(
+        _, _, clean, _ = find_signal_peaks(
             raw,
             height=float(settings["height"]),
             distance=int(settings["distance"]),
@@ -127,8 +127,6 @@ class PeakNavigator:
             self._focused_peak_loaded,
             selected_index,
             raw,
-            baseline,
-            flat,
             clean,
             visible_peaks,
             start,
@@ -138,12 +136,10 @@ class PeakNavigator:
         self,
         selected_index: int,
         raw: np.ndarray,
-        baseline: np.ndarray,
-        flat: np.ndarray,
         clean: np.ndarray,
         peaks: np.ndarray,
         offset: int,
     ) -> None:
         self.busy = False
         if selected_index == self.selected_index:
-            self.app.plot.draw_signal(raw, baseline, flat, clean, peaks, offset)
+            self.app.plot.draw_signal(raw, clean, peaks, offset)
