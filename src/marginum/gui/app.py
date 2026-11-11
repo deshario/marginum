@@ -12,19 +12,16 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-from .analysis import process_chunks
-from .processing import find_signal_peaks
-from .signal_io import read_signal_chunks
+from ..analysis import process_chunks
+from ..processing import find_signal_peaks
+from ..signal_io import read_signal_chunks
+from .config import LIVE_MAX_POINTS, LIVE_REFRESH_SECONDS, SAMPLE_RATE_HZ
 
 class _Cancelled(Exception):
     """Raised inside the worker thread when the user presses Stop."""
 
 
 class SignalAnalyzerApp:
-    SAMPLE_RATE_HZ = 50_000
-    LIVE_REFRESH_SECONDS = 2.0  # min gap between live redraws (faster slows the run)
-    LIVE_MAX_POINTS = 2_000  # max points drawn live (keeps redraws cheap)
-
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Marginum Signal Analyzer")
@@ -298,7 +295,7 @@ class SignalAnalyzerApp:
                 "chunk_size": int(self.chunk_size.get()),
                 "overlap": int(self.overlap.get()),
                 "height": float(self.height.get()),
-                "distance": round(float(self.distance.get()) * self.SAMPLE_RATE_HZ),
+                "distance": round(float(self.distance.get()) * SAMPLE_RATE_HZ),
                 "preview_samples": int(self.preview_samples.get()),
                 "show_live": self.show_live.get(),
                 "input_path": self.input_path.get(),
@@ -368,7 +365,7 @@ class SignalAnalyzerApp:
                 if not show_live:
                     return
                 now = time.perf_counter()
-                if now - last_live_update < self.LIVE_REFRESH_SECONDS and chunk_number != 1:
+                if now - last_live_update < LIVE_REFRESH_SECONDS and chunk_number != 1:
                     return
                 last_live_update = now
                 live_signal = (
@@ -505,7 +502,7 @@ class SignalAnalyzerApp:
     def _decimate_for_display(self, signal: np.ndarray) -> np.ndarray:
         """Shrink to about LIVE_MAX_POINTS using per-bucket min/max, so narrow
         peaks stay visible while the redraw cost stays constant."""
-        buckets = self.LIVE_MAX_POINTS // 2
+        buckets = LIVE_MAX_POINTS // 2
         size = len(signal) // buckets
         if size < 2:
             return signal
@@ -515,7 +512,7 @@ class SignalAnalyzerApp:
     def _draw_live_plot(self, signal: np.ndarray, rows: int) -> None:
         signal = self._decimate_for_display(signal)
         # The points are spread evenly over everything scanned so far.
-        live_time = np.linspace(0, rows / self.SAMPLE_RATE_HZ, len(signal))
+        live_time = np.linspace(0, rows / SAMPLE_RATE_HZ, len(signal))
         if self.live_line is None:
             self.figure.clear()
             axis = self.figure.add_subplot(111)
@@ -627,7 +624,7 @@ class SignalAnalyzerApp:
         self.figure.clear()
         axis = self.figure.add_subplot(111)
         axis.plot(
-            sample_indices / self.SAMPLE_RATE_HZ,
+            sample_indices / SAMPLE_RATE_HZ,
             sample_values,
             color="#555555",
             linewidth=0.5,
@@ -640,7 +637,7 @@ class SignalAnalyzerApp:
         valid = peak_indices < len(sample_values)
         if np.any(valid):
             axis.scatter(
-                peak_positions[valid] / self.SAMPLE_RATE_HZ,
+                peak_positions[valid] / SAMPLE_RATE_HZ,
                 sample_values[peak_indices[valid]],
                 color="red",
                 s=15,
@@ -854,9 +851,9 @@ class SignalAnalyzerApp:
     ) -> None:
         self.live_line = None
         self.figure.clear()
-        x = (np.arange(len(raw)) + offset) / self.SAMPLE_RATE_HZ
+        x = (np.arange(len(raw)) + offset) / SAMPLE_RATE_HZ
         local_peaks = np.asarray(peaks, dtype=int)
-        peak_x = (local_peaks + offset) / self.SAMPLE_RATE_HZ
+        peak_x = (local_peaks + offset) / SAMPLE_RATE_HZ
         axis = self.figure.add_subplot(111)
         axis.plot(
             x,
