@@ -9,13 +9,12 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.figure import Figure
 
 from ..analysis import process_chunks
 from ..processing import find_signal_peaks
 from ..signal_io import read_signal_chunks
-from .config import LIVE_MAX_POINTS, LIVE_REFRESH_SECONDS, SAMPLE_RATE_HZ
+from .config import LIVE_REFRESH_SECONDS, SAMPLE_RATE_HZ
+from .plot_view import PlotView
 
 class _Cancelled(Exception):
     """Raised inside the worker thread when the user presses Stop."""
@@ -60,9 +59,7 @@ class SignalAnalyzerApp:
         self.running = False
         self.run_settings: dict[str, int | float | str | bool] = {}
         self.show_live = tk.BooleanVar(value=True)
-        self.figure = Figure(figsize=(8, 6), dpi=100)
-        self.live_line = None
-        self.canvas: FigureCanvasTkAgg
+        self.plot: PlotView
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self._build()
 
@@ -177,8 +174,7 @@ class SignalAnalyzerApp:
         plot_frame.grid(row=0, column=1, sticky="nsew", padx=6, pady=12)
         plot_frame.rowconfigure(0, weight=1)
         plot_frame.columnconfigure(0, weight=1)
-        self.canvas = FigureCanvasTkAgg(self.figure, master=plot_frame)
-        self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self.plot = PlotView(plot_frame)
         navigation = ttk.Frame(plot_frame)
         navigation.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         self.previous_button = ttk.Button(
@@ -197,7 +193,7 @@ class SignalAnalyzerApp:
         ttk.Label(navigation, textvariable=self.peak_position).pack(
             side=tk.LEFT, padx=(12, 0)
         )
-        self._draw_empty_plot()
+        self.plot.draw_empty()
 
     def _toggle_advanced(self) -> None:
         self.advanced_expanded = not self.advanced_expanded
@@ -274,7 +270,7 @@ class SignalAnalyzerApp:
             self.selected_peak_index = -1
             self._set_navigation_enabled(False)
             self.peak_position.set("No peaks selected")
-            self._draw_empty_plot()
+            self.plot.draw_empty()
             self.status.set("")
 
     def _choose_output(self) -> None:
@@ -331,14 +327,11 @@ class SignalAnalyzerApp:
         self._set_navigation_enabled(False)
         self.peak_position.set("")
         self.summary.set("")  # hide the previous run's results
-        self.live_line = None
-        self.figure.clear()
-        if not settings["show_live"]:
-            self.figure.text(
-                0.5, 0.5, "Live plot is off. The signal appears when analysis finishes.",
-                ha="center", va="center",
-            )
-        self.canvas.draw_idle()
+        self.plot.clear(
+            None
+            if settings["show_live"]
+            else "Live plot is off. The signal appears when analysis finishes."
+        )
         threading.Thread(
             target=self._process,
             args=(settings, started_at),
@@ -478,7 +471,7 @@ class SignalAnalyzerApp:
     def _live_update(self, signal: np.ndarray, rows: int, percent: int) -> None:
         self.progress_detail.set(f"{rows:,} rows scanned")
         if signal.size:
-            self._draw_live_plot(signal, rows)
+            self.plot.draw_live(signal, rows)
 
     def _reading_update(self, percent: int) -> None:
         self._set_progress(percent)
@@ -498,39 +491,6 @@ class SignalAnalyzerApp:
         elapsed = time.perf_counter() - self.processing_started_at
         self.elapsed_time.set(f"Processing time: {int(elapsed)} s")
         self.root.after(100, self._update_elapsed_time)
-
-    def _decimate_for_display(self, signal: np.ndarray) -> np.ndarray:
-        """Shrink to about LIVE_MAX_POINTS using per-bucket min/max, so narrow
-        peaks stay visible while the redraw cost stays constant."""
-        buckets = LIVE_MAX_POINTS // 2
-        size = len(signal) // buckets
-        if size < 2:
-            return signal
-        blocks = signal[: size * buckets].reshape(buckets, size)
-        return np.column_stack((blocks.min(axis=1), blocks.max(axis=1))).ravel()
-
-    def _draw_live_plot(self, signal: np.ndarray, rows: int) -> None:
-        signal = self._decimate_for_display(signal)
-        # The points are spread evenly over everything scanned so far.
-        live_time = np.linspace(0, rows / SAMPLE_RATE_HZ, len(signal))
-        if self.live_line is None:
-            self.figure.clear()
-            axis = self.figure.add_subplot(111)
-            (self.live_line,) = axis.plot(
-                live_time, signal, color="#2563eb", linewidth=0.8
-            )
-            axis.set_xlabel("Time (s)")
-            axis.set_ylabel("ADC counts (adc2)")
-            axis.grid(alpha=0.25)
-            axis.set_title(f"Live signal overview ({rows:,} samples scanned)")
-            self.figure.tight_layout()  # after the title so it reserves room for it
-        else:
-            self.live_line.set_data(live_time, signal)
-            axis = self.live_line.axes
-            axis.relim()
-            axis.autoscale_view()
-        axis.set_title(f"Live signal overview ({rows:,} samples scanned)")
-        self.canvas.draw_idle()
 
     def _finished(
         self,
@@ -577,7 +537,7 @@ class SignalAnalyzerApp:
         else:
             self.peak_position.set("No peaks detected")
             self._set_navigation_enabled(False)
-            self._draw_plot(raw, baseline, flat, clean, peaks, offset=0)
+            self.plot.draw_signal(raw, baseline, flat, clean, peaks, offset=0)
         self._set_running(False)
 
     def _navigate_peak(self, direction: int) -> None:
@@ -608,49 +568,12 @@ class SignalAnalyzerApp:
         if not len(self.overview_values):
             self.status.set("Overview data is unavailable. Run analysis again.")
             return
-        self._draw_overview(
+        self.plot.draw_overview(
             self.overview_indices,
             self.overview_values,
             self.overview_total_samples,
+            self.full_peaks,
         )
-
-    def _draw_overview(
-        self,
-        sample_indices: np.ndarray,
-        sample_values: np.ndarray,
-        total_samples: int,
-    ) -> None:
-        self.live_line = None
-        self.figure.clear()
-        axis = self.figure.add_subplot(111)
-        axis.plot(
-            sample_indices / SAMPLE_RATE_HZ,
-            sample_values,
-            color="#555555",
-            linewidth=0.5,
-            label="Signal (downsampled)",
-        )
-        peak_positions = self.full_peaks[
-            self.full_peaks < total_samples
-        ]
-        peak_indices = np.searchsorted(sample_indices, peak_positions)
-        valid = peak_indices < len(sample_values)
-        if np.any(valid):
-            axis.scatter(
-                peak_positions[valid] / SAMPLE_RATE_HZ,
-                sample_values[peak_indices[valid]],
-                color="red",
-                s=15,
-                marker="x",
-                label=f"{len(peak_positions)} peaks",
-            )
-        axis.set_title(f"Signal overview - {len(self.full_peaks):,} peaks detected")
-        axis.set_xlabel("Time (s)")
-        axis.set_ylabel("ADC counts (adc2)")
-        axis.legend(loc="upper right")
-        axis.grid(True, alpha=0.3)
-        self.figure.tight_layout()
-        self.canvas.draw_idle()
         self.status.set("Full-file overview loaded.")
 
     def _clear_cache(self) -> None:
@@ -731,7 +654,7 @@ class SignalAnalyzerApp:
         self.previous_button.configure(state=tk.NORMAL)
         self.next_button.configure(state=tk.NORMAL)
         if selected_index == self.selected_peak_index:
-            self._draw_plot(raw, baseline, flat, clean, peaks, offset)
+            self.plot.draw_signal(raw, baseline, flat, clean, peaks, offset)
 
     def _read_window(self, start: int, stop: int) -> np.ndarray:
         if self.cached_chunks:
@@ -784,8 +707,8 @@ class SignalAnalyzerApp:
         self.summary.set("")
         self.peak_position.set("No peaks selected")
         self._set_navigation_enabled(False)
-        self.figure.clear()
-        self._draw_empty_plot()
+        self.plot.clear()
+        self.plot.draw_empty()
         self.status.set("")
         self._set_running(False)
 
@@ -825,63 +748,6 @@ class SignalAnalyzerApp:
         self.previous_button.configure(state=state)
         self.next_button.configure(state=state)
         self.overview_button.configure(state=state)
-
-    def _draw_empty_plot(self) -> None:
-        self.live_line = None
-        axis = self.figure.add_subplot(111)
-        axis.text(
-            0.5,
-            0.5,
-            "Choose a signal CSV file",
-            ha="center",
-            va="center",
-            transform=axis.transAxes,
-        )
-        axis.set_axis_off()
-        self.canvas.draw_idle()
-
-    def _draw_plot(
-        self,
-        raw: np.ndarray,
-        baseline: np.ndarray,
-        flat: np.ndarray,
-        clean: np.ndarray,
-        peaks: np.ndarray,
-        offset: int = 0,
-    ) -> None:
-        self.live_line = None
-        self.figure.clear()
-        x = (np.arange(len(raw)) + offset) / SAMPLE_RATE_HZ
-        local_peaks = np.asarray(peaks, dtype=int)
-        peak_x = (local_peaks + offset) / SAMPLE_RATE_HZ
-        axis = self.figure.add_subplot(111)
-        axis.plot(
-            x,
-            raw,
-            color="#555555",
-            alpha=0.55,
-            linewidth=0.8,
-            label="Raw signal",
-        )
-        axis.plot(x, clean, color="blue", linewidth=0.9, label="Smoothed signal")
-        if len(peaks):
-            axis.plot(
-                peak_x,
-                clean[local_peaks],
-                "x",
-                color="red",
-                markersize=10,
-                markeredgewidth=1.5,
-                zorder=4,
-                label=f"Detected peaks ({len(peaks)})",
-            )
-        axis.set_xlabel("Time (s)")
-        axis.set_ylabel("ADC counts (adc2)")
-        axis.set_title(f"Signal - {len(peaks)} peaks found")
-        axis.grid(True, alpha=0.3)
-        axis.legend(loc="upper right")
-        self.figure.tight_layout()
-        self.canvas.draw_idle()
 
 def main() -> None:
     root = tk.Tk()
