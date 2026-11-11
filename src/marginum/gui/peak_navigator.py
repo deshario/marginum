@@ -113,7 +113,7 @@ class PeakNavigator:
         settings = app.run_settings
         window = max(1, int(settings["preview_samples"]))
         start = max(0, peak - window // 2)
-        raw = app._read_window(start, start + window)
+        raw = app.cache.read_window(start, start + window, app.run_settings)
         if raw.size == 0:
             raise ValueError("no samples in the selected window")
         baseline, flat, clean, _ = find_signal_peaks(

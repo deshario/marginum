@@ -2,25 +2,18 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
-import shutil
-import tempfile
 import time
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
 
-from ..analysis import process_chunks
-from ..processing import find_signal_peaks
-from ..signal_io import read_signal_chunks
-from .config import LIVE_REFRESH_SECONDS, SAMPLE_RATE_HZ
+from .chunk_cache import ChunkCache
+from .config import SAMPLE_RATE_HZ
 from .peak_navigator import PeakNavigator
 from .plot_view import PlotView
 from .settings_panel import SettingsPanel
-
-class _Cancelled(Exception):
-    """Raised inside the worker thread when the user presses Stop."""
-
+from .worker import run_analysis
 
 class SignalAnalyzerApp:
     def __init__(self, root: tk.Tk) -> None:
@@ -48,8 +41,7 @@ class SignalAnalyzerApp:
         self.overview_indices = np.empty(0, dtype=int)
         self.overview_values = np.empty(0, dtype=float)
         self.overview_total_samples = 0
-        self.cache_dir: Path | None = None
-        self.cached_chunks: list[tuple[int, int, Path]] = []
+        self.cache = ChunkCache()
         self.cancel_event = threading.Event()
         self.running = False
         self.run_settings: dict[str, int | float | str | bool] = {}
@@ -206,140 +198,10 @@ class SignalAnalyzerApp:
             else "Live plot is off. The signal appears when analysis finishes."
         )
         threading.Thread(
-            target=self._process,
-            args=(settings, started_at),
+            target=run_analysis,
+            args=(self, settings, started_at),
             daemon=True,
         ).start()
-
-    def _process(
-        self, settings: dict[str, int | float], started_at: float
-    ) -> None:
-        try:
-            preview_size = int(settings["preview_samples"])
-            show_live = bool(settings["show_live"])
-            preview_parts: list[np.ndarray] = []
-            preview_rows = 0
-            live_values: list[np.ndarray] = []
-            overview_indices: list[np.ndarray] = []
-            overview_values: list[np.ndarray] = []
-            overview_total_samples = 0
-            last_live_update = 0.0
-            file_progress = 0
-
-            def update(chunk_number: int, rows: int) -> None:
-                nonlocal last_live_update
-                if not show_live:
-                    return
-                now = time.perf_counter()
-                if now - last_live_update < LIVE_REFRESH_SECONDS and chunk_number != 1:
-                    return
-                last_live_update = now
-                live_signal = (
-                    np.concatenate(live_values) if live_values else np.empty(0)
-                )
-                self.root.after(
-                    0,
-                    self._live_update,
-                    live_signal,
-                    rows,
-                    file_progress,
-                )
-
-            def chunks():
-                nonlocal preview_rows, file_progress, overview_total_samples
-                self._create_cache()
-
-                def update_file_progress(read_bytes: int, total_bytes: int) -> None:
-                    file_progress = min(
-                        99,
-                        max(1, int(read_bytes * 100 / max(total_bytes, 1))),
-                    )
-                    self.root.after(
-                        0,
-                        self._reading_update,
-                        file_progress,
-                    )
-
-                for chunk_number, chunk in enumerate(
-                    read_signal_chunks(
-                        str(settings["input_path"]),
-                        chunk_size=int(settings["chunk_size"]),
-                        progress=update_file_progress,
-                    ),
-                    start=1,
-                ):
-                    if self.cancel_event.is_set():
-                        raise _Cancelled
-                    chunk_start = overview_total_samples
-                    chunk_path = self.cache_dir / f"chunk-{chunk_number:06d}.npy"
-                    np.save(chunk_path, chunk)
-                    self.cached_chunks.append(
-                        (chunk_start, chunk_start + len(chunk), chunk_path)
-                    )
-                    if preview_rows < preview_size:
-                        needed = preview_size - preview_rows
-                        preview_parts.append(chunk[:needed])
-                        preview_rows += min(len(chunk), needed)
-                    step = max(1, len(chunk) // 1_000)
-                    sampled_indices = overview_total_samples + np.arange(
-                        0, len(chunk), step
-                    )
-                    sampled_values = chunk[::step]
-                    if show_live:
-                        live_values.append(sampled_values)
-                    overview_indices.append(sampled_indices)
-                    overview_values.append(sampled_values)
-                    overview_total_samples += len(chunk)
-                    self.root.after(
-                        0,
-                        self._chunk_progress,
-                        file_progress,
-                        overview_total_samples,
-                    )
-                    yield chunk
-
-            peaks = process_chunks(
-                chunks(),
-                progress=update,
-                overlap=int(settings["overlap"]),
-                height=float(settings["height"]),
-                distance=int(settings["distance"]),
-            )
-            preview = np.concatenate(preview_parts) if preview_parts else np.empty(0)
-            if len(preview) > preview_size:
-                preview = preview[:preview_size]
-            if preview.size == 0:
-                raise ValueError("Signal file contains no samples")
-            baseline, flat, clean, _ = find_signal_peaks(
-                preview,
-                height=float(settings["height"]),
-                distance=int(settings["distance"]),
-            )
-            output = Path(self.output_path.get())
-            output.parent.mkdir(parents=True, exist_ok=True)
-            np.savetxt(output, peaks, fmt="%d")
-            self.root.after(
-                0,
-                self._finished,
-                preview,
-                baseline,
-                flat,
-                clean,
-                peaks,
-                output,
-                np.concatenate(overview_indices)
-                if overview_indices
-                else np.empty(0, dtype=int),
-                np.concatenate(overview_values)
-                if overview_values
-                else np.empty(0, dtype=float),
-                overview_total_samples,
-                time.perf_counter() - started_at,
-            )
-        except _Cancelled:
-            self.root.after(0, self._cancelled)
-        except (OSError, ValueError, IndexError) as error:
-            self.root.after(0, self._failed, str(error))
 
     def _live_update(self, signal: np.ndarray, rows: int, percent: int) -> None:
         self.progress_detail.set(f"{rows:,} rows scanned")
@@ -407,51 +269,18 @@ class SignalAnalyzerApp:
         self._set_running(False)
 
     def _clear_cache(self) -> None:
-        if self.cache_dir is not None:
-            shutil.rmtree(self.cache_dir, ignore_errors=True)
-        self.cache_dir = None
-        self.cached_chunks = []
+        self.cache.clear()
         self.overview_indices = np.empty(0, dtype=int)
         self.overview_values = np.empty(0, dtype=float)
         self.overview_total_samples = 0
 
     def _create_cache(self) -> None:
         self._clear_cache()
-        self.cache_dir = Path(tempfile.mkdtemp(prefix="marginum-signal-cache-"))
+        self.cache.create()
 
     def _close(self) -> None:
         self._clear_cache()
         self.root.destroy()
-
-    def _read_window(self, start: int, stop: int) -> np.ndarray:
-        if self.cached_chunks:
-            values: list[np.ndarray] = []
-            for chunk_start, chunk_stop, chunk_path in self.cached_chunks:
-                if chunk_stop <= start:
-                    continue
-                if chunk_start >= stop:
-                    break
-                chunk = np.load(chunk_path, mmap_mode="r")
-                left = max(0, start - chunk_start)
-                right = min(len(chunk), stop - chunk_start)
-                values.append(np.asarray(chunk[left:right]))
-            return np.concatenate(values) if values else np.empty(0, dtype=float)
-
-        values: list[np.ndarray] = []
-        position = 0
-        for chunk in read_signal_chunks(
-            str(self.run_settings["input_path"]),
-            chunk_size=max(1, min(int(self.run_settings["chunk_size"]), stop - start)),
-        ):
-            chunk_stop = position + len(chunk)
-            if chunk_stop > start and position < stop:
-                left = max(0, start - position)
-                right = min(len(chunk), stop - position)
-                values.append(chunk[left:right])
-            position = chunk_stop
-            if position >= stop:
-                break
-        return np.concatenate(values) if values else np.empty(0, dtype=float)
 
     def _stop(self) -> None:
         """Ask the worker to stop; it replies with _cancelled once it has."""
