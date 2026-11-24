@@ -1,6 +1,6 @@
 # Signal analysis notebook
 
-`signal_analysis_clean_latest.ipynb` finds peaks in raw sensor recordings and relates the peak
+`signal_analysis.ipynb` finds peaks in raw sensor recordings and relates the peak
 count to tumour size and suctioned volume. All results are already saved in the notebook, so it
 can be read without running it.
 
@@ -34,8 +34,8 @@ Copy the 10 files from the folder inside it directly into this folder.
 
 ## Run
 
-1. Open `signal_analysis_clean_latest.ipynb` in Jupyter (`jupyter notebook
-   signal_analysis_clean_latest.ipynb`) or in VS Code, with this folder as the working folder.
+1. Open `signal_analysis.ipynb` in Jupyter (`jupyter notebook
+   signal_analysis.ipynb`) or in VS Code, with this folder as the working folder.
    In VS Code, select the `.venv` environment as the kernel.
 
 2. Click **Run All**.
