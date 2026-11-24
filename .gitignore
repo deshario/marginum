@@ -12,3 +12,8 @@ wheels/
 notebooks/
 output/
 data/
+
+# Notebook data (large, not part of the submission)
+analysis/*
+!analysis/signal_analysis_clean_latest.ipynb
+!analysis/README.md
