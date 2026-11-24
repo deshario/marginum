@@ -3,8 +3,8 @@
 `signal_analysis.ipynb` counts the peaks in sensor recordings. It then compares the number of
 peaks with tumour size and with the suctioned volume.
 
-The notebook already shows all its results, so you can read it without running it. You can also
-read it online: https://deshario.github.io/marginum/
+To see the results without running it, open the notebook or view it online:
+https://deshario.github.io/marginum/
 
 ## What you need
 
@@ -21,8 +21,7 @@ pip install numpy pandas scipy matplotlib jupyter
 
 ## Data (not included)
 
-Download **Marginum Measurement Data** from Moodle. Put the files in this folder, next to the
-notebook. Give each file the name in the left column.
+Download [**Marginum Measurement Data**](https://moodle.uef.fi/mod/folder/view.php?id=956460) from Moodle and put the files next to the notebook, named as in the left column.
 
 | File name | Where to find it on Moodle |
 |---|---|
@@ -31,7 +30,7 @@ notebook. Give each file the name in the left column.
 | `just water.csv` | `Test signals from previous years/Signal 4.7z` |
 | `8Gb signal.csv` | `Data for suction of known volumes + 4½ h hours [2025].7z` → `Original/1. LONG_suction_HIGH_CONC_4ml_(and_3_times_resuction).csv` |
 
-**Tumour files:** open `Test signals from previous years/Tumor 1 gr - 2 gr - 3 gr with resuction.7z`.
+**Tumour files:** extract `Test signals from previous years/Tumor 1 gr - 2 gr - 3 gr with resuction.7z`.
 It has a folder with 10 files. Copy the 10 files (not the folder) into this folder.
 
 ## Run
